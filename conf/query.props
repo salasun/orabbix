@@ -1,0 +1,301 @@
+DefaultQueryPeriod=2
+
+QueryList=archive,audit,dbblockgets,dbconsistentgets,dbhitratio,dbphysicalread,dbversion,hitratio_body,hitratio_sqlarea,hitratio_table_proc, \
+lio_current_read,locks,maxprocs,maxsession,miss_latch,pga_aggregate_target, pga,phio_datafile_reads,phio_datafile_writes,phio_redo_writes,pinhitratio_body,pinhitratio_sqlarea,pinhitratio_table-proc,pinhitratio_trigger, \
+pool_dict_cache,pool_free_mem,pool_lib_cache,pool_misc,pool_sql_area,sga_buffer_cache,dbfilesize,dbsize, \
+sga_fixed,sga_java_pool,sga_large_pool,sga_log_buffer,sga_shared_pool,tbl_space,hitratio_trigger,lio_block_changes,lio_consistent_read,users_locked,uptime,tablespace,host_login_cnt,instance,global_session_process,global_session_active,global_session_inactive,global_session_total,global_session_system,global_session_userconn,global_waits_controfileio,global_waits_directpath_read,global_waits_file_io,global_waits_latch,global_waits_logwrite,global_waits_multiblock_read,global_waits_other,global_waits_singleblock_read,global_waits_sqlnet,user_info,busy_sql_1,busy_sql_2,big_object,instance_cnt
+
+DataGuardPrimaryQueryList=dg_error,dg_sequence_number
+DataGuardStandbyQueryList=dg_sequence_number_stby
+RmanQueryList=rman_check_status
+
+rman_check_status.Query=select ' DB NAME->'||DB_NAME||'- ROW TYPE->'||ROW_TYPE||'- START TIME->'||to_char(start_time, 'Dy DD-Mon-YYYY HH24:MI:SS') ||'- END TIME->'||to_char(end_time, 'Dy DD-Mon-YYYY HH24:MI:SS')||'- MBYTES PROCESSED->'||MBYTES_PROCESSED||'- OBJECT TYPE->'||OBJECT_TYPE||'- STATUS->'||STATUS||'- OUTPUT DEVICE->'||OUTPUT_DEVICE_TYPE||'- INPUT MB->'||INPUT_BYTES/1048576||'- OUT MB'||OUTPUT_BYTES/1048576 \
+   FROM   rc_rman_status \
+   WHERE  start_time > SYSDATE - 1 \
+   AND ( STATUS like '%FAILED%' \
+   OR  STATUS like '%ERROR%') \
+   ORDER  BY END_TIME
+
+rman_check_status.NoDataFound=none
+
+uptime.Query=select to_char((sysdate-startup_time)*86400, 'FM99999999999999990') retvalue from v$instance
+
+users_locked.Query=SELECT username||' '|| lock_date ||' '|| account_status FROM dba_users where ACCOUNT_STATUS like 'EXPIRED(GRACE)' or ACCOUNT_STATUS like 'LOCKED(TIMED)'
+users_locked.NoDataFound=none
+
+archive.Query=select round(A.LOGS*B.AVG/1024/1024/10) from ( SELECT COUNT (*)  LOGS FROM V$LOG_HISTORY WHERE FIRST_TIME >= (sysdate -10/60/24)) A, ( SELECT Avg(BYTES) AVG,  Count(1), Max(BYTES) Max_Bytes, Min(BYTES) Min_Bytes  FROM  v$log) B
+archive.RaceConditionQuery=select value from v$parameter where name='log_archive_start'
+archive.RaceConditionValue=FALSE
+
+audit.Query=select username "username", \
+	to_char(timestamp,'DD-MON-YYYY HH24:MI:SS') "time_stamp", \
+	action_name "statement", \
+	os_username "os_username", \
+	userhost "userhost", \
+	returncode||decode(returncode,'1004','-Wrong Connection','1005','-NULL Password','1017','-Wrong Password','1045','-Insufficient Priviledge','0','-Login Accepted','--') "returncode" \
+	from sys.dba_audit_session \
+	where (sysdate - timestamp)*24 < 1 and returncode <> 0 \
+	order by timestamp
+audit.NoDataFound=none
+
+#非一致性读，一条查询语句发出后，所读的块中，除了consistent gets，就是db block gets。
+dbblockgets.Query=select to_char(sum(decode(name,'db block gets', value,0))) "block_gets" \
+	FROM v$sysstat
+#一致性读，为了保持读一致性而获取的块，其中可能包括undo block，也有包括非undo block，而非undo block有有可能包括 buffer cache block ，也有可能包括 disk block。可以简单的理解为，最终的结果集，所获取的块数。
+dbconsistentgets.Query=select to_char(sum(decode(name,'consistent gets', value,0))) "consistent_gets" \
+	FROM v$sysstat
+
+dbhitratio.Query=select ROUND(( \
+	sum(decode(name,'consistent gets', value,0)) + sum(decode(name,'db block gets', value,0)) - sum(decode(name,'physical reads', value,0))) / (sum(decode(name,'consistent gets', value,0)) + sum(decode(name,'db block gets', value,0)) ) * 100, 6) "hit_ratio" \
+	FROM v$sysstat
+#物理读，就是从磁盘中读取出的 block 数目
+dbphysicalread.Query=select sum(decode(name,'physical reads', value,0)) "phys_reads" FROM v$sysstat
+
+dbversion.Query=select COMP_ID||' '||COMP_NAME||' '||VERSION||' '||STATUS||' <br />' from dba_registry union SELECT ' - SERVERNAME = <b>'||UTL_INADDR.get_host_name ||'</b> - SERVERADDRESS = <b>'||UTL_INADDR.get_host_address||'</b> <br />'from dual union SELECT ' - DB_NAME = <b>'||SYS_CONTEXT ('USERENV', 'DB_NAME') ||'</b> - INSTANCE_NAME = <b>' ||SYS_CONTEXT ('USERENV', 'INSTANCE_NAME')||'</b> <br />' FROM dual
+
+sqlnotindexed.Query=SELECT SUM(DECODE(NAME, 'table scans (long tables)', VALUE, 0))/ (SUM(DECODE(NAME, 'table scans (long tables)', VALUE, 0))+SUM(DECODE(NAME, 'table scans (short tables)', VALUE, 0)))*100 SQL_NOT_INDEXED FROM V$SYSSTAT WHERE 1=1 AND ( NAME IN ('table scans (long tables)','table scans (short tables)') )
+
+hitratio_body.Query=select ROUND(gethitratio*100,6) "get_pct" FROM v$librarycache where namespace ='BODY'
+hitratio_sqlarea.Query=select ROUND(gethitratio*100,6) "get_pct" FROM v$librarycache where namespace ='SQL AREA'
+hitratio_trigger.Query=select ROUND(gethitratio*100,6) "get_pct" FROM v$librarycache where namespace ='TRIGGER'
+hitratio_table_proc.Query=select ROUND(gethitratio*100,6) "get_pct" FROM v$librarycache where namespace = 'TABLE/PROCEDURE'
+
+lio_block_changes.Query=SELECT to_char(SUM(DECODE(NAME,'db block changes',VALUE,0))) \
+FROM V$SYSSTAT \
+WHERE NAME ='db block changes'
+
+lio_consistent_read.Query=SELECT to_char(sum(decode(name,'consistent gets',value,0))) FROM V$SYSSTAT WHERE NAME ='consistent gets'
+lio_current_read.Query=SELECT to_char(sum(decode(name,'db block gets',value,0))) FROM V$SYSSTAT WHERE NAME ='db block gets'
+
+locks.Query=SELECT b.session_id AS sid, \
+       NVL(b.oracle_username, '(oracle)') AS username, \
+       a.owner AS object_owner, \
+       a.object_name, \
+       Decode(b.locked_mode, 0, 'None', \
+                             1, 'Null (NULL)', \
+                             2, 'Row-S (SS)', \
+                             3, 'Row-X (SX)', \
+                             4, 'Share (S)', \
+                             5, 'S/Row-X (SSX)', \
+                             6, 'Exclusive (X)', \
+                             b.locked_mode) locked_mode, \
+       b.os_user_name \
+FROM   dba_objects a, \
+       v$locked_object b \
+WHERE  a.object_id = b.object_id \
+ORDER BY 1, 2, 3, 4
+
+#locks.Query=select	sn.USERNAME ||'@'||sn.machine, \
+	'|SID->' || m.SID, \
+	'|Serial->'|| sn.SERIAL#, \
+	'|Lock Type->'||m.TYPE, \
+	decode(LMODE, \
+		1, 'Null', \
+		2, 'Row-S (SS)', \
+		3, 'Row-X (SX)', \
+		4, 'Share', \
+		5, 'S/Row-X (SSX)', \
+		6, 'Exclusive') lock_type, \
+	decode(REQUEST, \
+		0, 'None', \
+		1, 'Null', \
+		2, 'Row-S (SS)', \
+		3, 'Row-X (SX)', \
+	    4, 'Share', \
+		5, 'S/Row-X (SSX)', \
+		6, 'Exclusive') lock_requested, \
+	'|Time (Sec)->'||m.CTIME "Time(sec)", \
+	'|ID1->'||m.ID1, \
+	'|ID2->'||m.ID2, \
+	'|SQL Text->'||t.SQL_TEXT \
+from 	v$session sn, \
+	v$lock m , \
+	v$sqltext t \
+where 	t.ADDRESS =sn.SQL_ADDRESS \
+and 	t.HASH_VALUE =sn.SQL_HASH_VALUE \
+and 	((sn.SID =m.SID and m.REQUEST !=0) \
+or 	(sn.SID =m.SID and m.REQUEST =0 and LMODE !=4 and (ID1, ID2) in \
+    (select s.ID1, s.ID2 \
+     from 	v$lock S \
+     where 	REQUEST !=0 \
+	 and  s.ctime > 5 \
+     and 	s.ID1 =m.ID1 \
+     and 	s.ID2 =m.ID2))) \
+order by sn.USERNAME, sn.SID, t.PIECE 
+locks.NoDataFound=none
+
+#SGA：System Global Area是Oracle Instance的基本组成部分，在实例启动时分配;系统全局域SGA主要由三部分构成：共享池、数据缓冲区、日志缓冲区。PGA：Process Global Area是为每个连接到Oracle database的用户进程保留的内存。
+#sga 是系统全局区，每个实例只有一个sga，所有的进程都能访sga。pga是程序全局区，每个一个进程都一个pga，pga是私有的，只有对应进程才能访问对应的pga。
+maxprocs.Query=select value "maxprocs" from v$parameter where name ='processes'
+maxsession.Query=select value "maxsess" from v$parameter where name ='sessions'
+miss_latch.Query=SELECT SUM(misses) FROM V$LATCH
+pga_aggregate_target.Query=select to_char(decode( unit,'bytes', value/1024/1024, value),'999999999.9') value from V$PGASTAT where name in 'aggregate PGA target parameter'
+pga.Query=select to_char(decode( unit,'bytes', value/1024/1024, value),'999999999.9') value from V$PGASTAT where name in 'total PGA inuse'
+phio_datafile_reads.Query=select to_char(sum(decode(name,'physical reads direct',value,0))) FROM V$SYSSTAT where name ='physical reads direct'
+phio_datafile_writes.Query=select to_char(sum(decode(name,'physical writes direct',value,0))) FROM V$SYSSTAT where name ='physical writes direct'
+phio_redo_writes.Query=select to_char(sum(decode(name,'redo writes',value,0))) FROM V$SYSSTAT where name ='redo writes'
+pinhitratio_body.Query=select ROUND(pins/(pins+reloads)*100, 6) "pin_hit ratio" FROM v$librarycache where namespace ='BODY'
+pinhitratio_sqlarea.Query=select ROUND(pins/(pins+reloads)*100, 6) "pin_hit ratio" FROM v$librarycache where namespace ='SQL AREA'
+pinhitratio_table-proc.Query=select ROUND(pins/(pins+reloads)*100, 6) "pin_hit ratio" FROM v$librarycache where namespace ='TABLE/PROCEDURE'
+pinhitratio_trigger.Query=select ROUND(pins/(pins+reloads)*100, 6) "pin_hit ratio" FROM v$librarycache where namespace ='TRIGGER'
+pool_dict_cache.Query=SELECT TO_CHAR(ROUND(SUM(decode(pool,'shared pool',decode(name,'dictionary cache',(bytes)/(1024*1024),0),0)),2)) pool_dict_cache FROM V$SGASTAT
+pool_free_mem.Query=SELECT TO_CHAR(ROUND(SUM(decode(pool,'shared pool',decode(name,'free memory',(bytes)/(1024*1024),0),0)),2)) pool_free_mem FROM V$SGASTAT
+pool_lib_cache.Query=SELECT TO_CHAR(ROUND(SUM(decode(pool,'shared pool',decode(name,'library cache',(bytes)/(1024*1024),0),0)),2)) pool_lib_cache FROM V$SGASTAT
+pool_misc.Query=SELECT TO_CHAR(ROUND(SUM(decode(pool,'shared pool',decode(name,'library cache',0,'dictionary cache',0,'free memory',0,'sql area', 0,(bytes)/(1024*1024)),0)),2)) pool_misc FROM V$SGASTAT
+pool_sql_area.Query=SELECT TO_CHAR(ROUND(SUM(decode(pool,'shared pool',decode(name,'sql area',(bytes)/(1024*1024),0),0)),2)) pool_sql_area FROM V$SGASTAT
+sga_buffer_cache.Query=SELECT to_char(ROUND(SUM(decode(pool,NULL,decode(name,'db_block_buffers',(bytes)/(1024*1024),'buffer_cache',(bytes)/(1024*1024),0),0)),2)) sga_bufcache FROM V$SGASTAT
+sga_fixed.Query=SELECT TO_CHAR(ROUND(SUM(decode(pool,NULL,decode(name,'fixed_sga',(bytes)/(1024*1024),0),0)),2)) sga_fixed FROM V$SGASTAT
+sga_java_pool.Query=SELECT to_char(ROUND(SUM(decode(pool,'java pool',(bytes)/(1024*1024),0)),2)) sga_jpool FROM V$SGASTAT
+sga_large_pool.Query=SELECT to_char(ROUND(SUM(decode(pool,'large pool',(bytes)/(1024*1024),0)),2)) sga_lpool FROM V$SGASTAT
+sga_log_buffer.Query=SELECT TO_CHAR(ROUND(SUM(decode(pool,NULL,decode(name,'log_buffer',(bytes)/(1024*1024),0),0)),2)) sga_lbuffer FROM V$SGASTAT
+sga_shared_pool.Query=SELECT TO_CHAR(ROUND(SUM(decode(pool,'shared pool',decode(name,'library cache',0,'dictionary cache',0,'free memory',0,'sql area',0,(bytes)/(1024*1024)),0)),2)) pool_misc FROM V$SGASTAT
+
+tbl_space.Query=SELECT * FROM ( \
+select '- Tablespace ->',t.tablespace_name ktablespace, \
+       '- Type->',substr(t.contents, 1, 1) tipo, \
+       '- Used(MB)->',trunc((d.tbs_size-nvl(s.free_space, 0))/1024/1024) ktbs_em_uso, \
+       '- ActualSize(MB)->',trunc(d.tbs_size/1024/1024) ktbs_size, \
+       '- MaxSize(MB)->',trunc(d.tbs_maxsize/1024/1024) ktbs_maxsize, \
+       '- FreeSpace(MB)->',trunc(nvl(s.free_space, 0)/1024/1024) kfree_space, \
+       '- Space->',trunc((d.tbs_maxsize - d.tbs_size + nvl(s.free_space, 0))/1024/1024) kspace, \
+       '- Perc->',decode(d.tbs_maxsize, 0, 0, trunc((d.tbs_size-nvl(s.free_space, 0))*100/d.tbs_maxsize)) kperc \
+from \
+  ( select SUM(bytes) tbs_size, \
+           SUM(decode(sign(maxbytes - bytes), -1, bytes, maxbytes)) tbs_maxsize, tablespace_name tablespace \
+    from ( select nvl(bytes, 0) bytes, nvl(maxbytes, 0) maxbytes, tablespace_name \
+    from dba_data_files \
+    union all \
+    select nvl(bytes, 0) bytes, nvl(maxbytes, 0) maxbytes, tablespace_name \
+    from dba_temp_files \
+    ) \
+    group by tablespace_name \
+    ) d, \
+    ( select SUM(bytes) free_space, \
+    tablespace_name tablespace \
+    from dba_free_space \
+    group by tablespace_name \
+    ) s, \
+    dba_tablespaces t \
+    where t.tablespace_name = d.tablespace(+) and \
+    t.tablespace_name = s.tablespace(+) \
+    order by 8) \
+    where kperc > 93 \
+    and tipo <>'T' \
+    and tipo <>'U'
+tbl_space.NoDataFound=none
+
+dg_error.Query=SELECT ERROR_CODE, SEVERITY, MESSAGE, TO_CHAR(TIMESTAMP, 'DD-MON-RR HH24:MI:SS') TIMESTAMP FROM V$DATAGUARD_STATUS WHERE CALLOUT='YES' AND TIMESTAMP > SYSDATE-1
+dg_error.NoDataFound=none
+
+dg_sequence_number.Query=SELECT MAX (sequence#) FROM v$log_history
+
+#dg_sequence_number_stby.Query=SELECT MAX (sequence#) last_log_applied FROM   v$log_history
+dg_sequence_number_stby.Query= select max(sequence#) from v$archived_log
+
+
+dbfilesize.Query=select cast(sum(bytes/1024/1024/1024) as NUMBER(10,2)) retvalue from dba_data_files
+dbsize.Query=SELECT cast(sum(NVL(a.bytes/1024/1024/1024 - NVL(f.bytes/1024/1024/1024, 0), 0)) as NUMBER(10,2)) retvalue \
+FROM sys.dba_tablespaces d, \
+(select tablespace_name, sum(bytes) bytes from dba_data_files group by tablespace_name) a, \
+(select tablespace_name, sum(bytes) bytes from dba_free_space group by tablespace_name) f \
+WHERE d.tablespace_name = a.tablespace_name(+) AND d.tablespace_name = f.tablespace_name(+) \
+AND NOT (d.extent_management like 'LOCAL' AND d.contents like 'TEMPORARY')
+
+#tablespace
+tablespace.Query=SELECT df.tablespace_name ts_name, '##', \
+         (df.totalspace - NVL (fs.freespace, 0)) used, '##', \
+         NVL (fs.freespace, 0) free, '##', \
+         df.totalspace total, '##', \
+         ROUND (100 * (NVL (fs.freespace, 0) / df.totalspace), 2) pfree, '##', \
+         ROUND (100 * (1 - NVL (fs.freespace, 0) / df.totalspace), 2) pused, '####' \
+    FROM (  SELECT tablespace_name, ROUND (SUM (bytes)) totalspace \
+              FROM dba_data_files \
+          GROUP BY tablespace_name) df, \
+         (  SELECT tablespace_name, ROUND (SUM (bytes)) freespace \
+              FROM dba_free_space \
+          GROUP BY tablespace_name) fs \
+   WHERE df.tablespace_name = fs.tablespace_name(+) \
+ORDER BY 1 DESC
+
+##
+host_login_cnt.Query=select to_char(replace(wmsys.wm_concat(content),',','')) from \
+(select ip||'##'||cnt||'####' content from (select l.IP_ADDRESS ip, count(l.IP_ADDRESS) cnt from SYSTEM.LOGIN_LOG l \
+where l.USER_IN_DB = (select USER_IN_DB from (select USER_IN_DB, count(1) c from SYSTEM.LOGIN_LOG where LOGIN_ON_TIME >= sysdate - 7 group by USER_IN_DB order by c desc) where USER_IN_DB not like 'SYS%' and rownum = 1) \
+and LOGIN_ON_TIME >= sysdate - 7 \
+group by l.IP_ADDRESS order by cnt desc) where rownum < 11)
+
+#instance display
+instance.Query=select to_char('{"data":['||wmsys.wm_concat('{"{#INST_NAME}":"'||value||'"}')||']}') from gv$parameter where name = 'instance_name'
+#
+global_session_process.Query=select '####'||inst_id||'##', count(*) "procnum" from gv$process group by inst_id
+global_session_active.Query=select '####'||inst_id||'##', count(*) from gv$session where TYPE!='BACKGROUND' and status='ACTIVE' group by inst_id
+global_session_inactive.Query=select '####'||inst_id||'##', SUM(Decode(Type, 'BACKGROUND', 0, Decode(Status, 'ACTIVE', 0, 1))) FROM gv$session group by inst_id
+global_session_total.Query=select '####'||inst_id||'##', count(*) from gv$session group by inst_id
+global_session_system.Query=select '####'||inst_id||'##', SUM(Decode(Type, 'BACKGROUND', 1, 0)) system_sessions FROM gv$session group by inst_id
+global_session_userconn.Query=select '####'||inst_id||'##', count(username) from gv$session where username is not null group by inst_id
+#
+global_waits_controfileio.Query=SELECT '####'||inst_id||'##', to_char(sum(decode(event,'control file sequential read', total_waits, 'control file single write', total_waits, 'control file parallel write',total_waits,0))) ControlFileIO FROM GV$system_event WHERE 1=1 AND event not in ( 'SQL*Net message from client', 'SQL*Net more data from client','pmon timer', 'rdbms ipc message', 'rdbms ipc reply', 'smon timer') group by inst_id
+global_waits_directpath_read.Query=SELECT '####'||inst_id||'##', to_char(sum(decode(event,'direct path read',total_waits,0))) DirectPathRead FROM GV$system_event WHERE 1=1 AND event not in (   'SQL*Net message from ', 'SQL*Net more data from client','pmon timer', 'rdbms ipc message', 'rdbms ipc reply', 'smon timer') group by inst_id
+global_waits_file_io.Query=SELECT '####'||inst_id||'##', to_char(sum(decode(event,'file identify',total_waits, 'file open',total_waits,0))) FileIO FROM GV$system_event WHERE 1=1 AND event not in (   'SQL*Net message from client',   'SQL*Net more data from client', 'pmon timer', 'rdbms ipc message', 'rdbms ipc reply', 'smon timer') group by inst_id
+global_waits_latch.Query=SELECT '####'||inst_id||'##', to_char(sum(decode(event,'control file sequential read', total_waits, \
+'control file single write', total_waits, 'control file parallel write',total_waits,0))) ControlFileIO \
+FROM GV$system_event WHERE 1=1 AND event not in ( \
+  'SQL*Net message from client', \
+  'SQL*Net more data from client', \
+  'pmon timer', 'rdbms ipc message', \
+  'rdbms ipc reply', 'smon timer') group by inst_id
+global_waits_logwrite.Query=SELECT '####'||inst_id||'##', to_char(sum(decode(event,'log file single write',total_waits, 'log file parallel write',total_waits,0))) LogWrite \
+FROM GV$system_event WHERE 1=1 AND event not in ( \
+  'SQL*Net message from client', \
+  'SQL*Net more data from client', \
+  'pmon timer', 'rdbms ipc message', \
+  'rdbms ipc reply', 'smon timer') group by inst_id
+global_waits_multiblock_read.Query=SELECT '####'||inst_id||'##', to_char(sum(decode(event,'db file scattered read',total_waits,0))) MultiBlockRead \
+FROM GV$system_event WHERE 1=1 AND event not in ( \
+  'SQL*Net message from client', \
+  'SQL*Net more data from client', \
+  'pmon timer', 'rdbms ipc message', \
+  'rdbms ipc reply', 'smon timer') group by inst_id
+global_waits_other.Query=SELECT '####'||inst_id||'##', to_char(sum(decode(event,'control file sequential read',0,'control file single write',0,'control file parallel write',0,'db file sequential read',0,'db file scattered read',0,'direct path read',0,'file identify',0,'file open',0,'SQL*Net message to client',0,'SQL*Net message to dblink',0, 'SQL*Net more data to client',0,'SQL*Net more data to dblink',0, 'SQL*Net break/reset to client',0,'SQL*Net break/reset to dblink',0, 'log file single write',0,'log file parallel write',0,total_waits))) Other FROM GV$system_event WHERE 1=1 AND event not in (  'SQL*Net message from client', 'SQL*Net more data from client', 'pmon timer', 'rdbms ipc message',  'rdbms ipc reply', 'smon timer') group by inst_id
+global_waits_singleblock_read.Query=SELECT '####'||inst_id||'##', to_char(sum(decode(event,'db file sequential read',total_waits,0))) SingleBlockRead \
+FROM GV$system_event WHERE 1=1 AND event not in ( \
+  'SQL*Net message from client', \
+  'SQL*Net more data from client', \
+  'pmon timer', 'rdbms ipc message', \
+  'rdbms ipc reply', 'smon timer') group by inst_id
+global_waits_sqlnet.Query=SELECT '####'||inst_id||'##', to_char(sum(decode(event,'SQL*Net message to client',total_waits,'SQL*Net message to dblink',total_waits,'SQL*Net more data to client',total_waits,'SQL*Net more data to dblink',total_waits,'SQL*Net break/reset to client',total_waits,'SQL*Net break/reset to dblink',total_waits,0))) SQLNET FROM GV$system_event WHERE 1=1 \
+AND event not in ( 'SQL*Net message from client','SQL*Net more data from client','pmon timer','rdbms ipc message','rdbms ipc reply', 'smon timer') group by inst_id
+
+user_info.Query=select to_char(replace(wmsys.wm_concat(content),',','')) from ( \
+select * from (select u.username||'##'||to_char(u.created, 'YYYY-MM-DD HH24:MI:SS')||'##'|| \
+CAST((u.expiry_date-sysdate) AS NUMBER (10))||'##'||nvl(to_char(l.login_time, 'YYYY-MM-DD HH24:MI:SS'), '-')||'##'||nvl(l.count, 0)||'##'||(case when u.username = 'SYS' or u.username = 'SYSTEM' then 'DBA' else to_char(nvl(r.role, null)) end)||'####' content from \
+(select username, created, expiry_date FROM dba_users WHERE account_status = 'OPEN' and username != 'SYSMAN') u \
+left join \
+(SELECT user_in_db, MAX (LOGIN_ON_TIME) login_time, COUNT (1) count FROM SYSTEM.LOGIN_LOG WHERE LOGIN_ON_TIME >= SYSDATE - 7 GROUP BY user_in_db) l \
+on u.username = l.user_in_db \
+left join \
+(SELECT grantee, wmsys.wm_concat (granted_role) role FROM dba_role_privs GROUP BY grantee) r \
+on u.username = r.grantee \
+order by nvl(l.count, 0) desc))
+
+busy_sql_1.Query=select to_char(replace(wmsys.wm_concat(content),',','')) from ( \
+SELECT inst_id||'##'||sql_text||'##'||elapsed_time||'####' content \
+  FROM (SELECT sql_id, child_number, sql_text, elapsed_time, cpu_time, \
+               disk_reads,inst_id, \
+               RANK () OVER (ORDER BY elapsed_time DESC) AS elapsed_rank \
+          FROM gv$sql) \
+ WHERE elapsed_rank <= 5)
+busy_sql_2.Query=select to_char(replace(wmsys.wm_concat(content),',','')) from ( \
+SELECT inst_id||'##'||sql_text||'##'||elapsed_time||'####' content \
+  FROM (SELECT sql_id, child_number, sql_text, elapsed_time, cpu_time, \
+               disk_reads,inst_id, \
+               RANK () OVER (ORDER BY elapsed_time DESC) AS elapsed_rank \
+          FROM gv$sql) \
+ WHERE elapsed_rank >5 and elapsed_rank <= 10)
+
+big_object.Query=select to_char(replace(wmsys.wm_concat(content),',','')) from ( \
+select * from ( \
+select s.SEGMENT_NAME||'##'||s.SEGMENT_TYPE||'##'||s.BYTES||'####' content from dba_segments s order by bytes desc \
+) where rownum < 11)
+
+instance_cnt.Query=select count(1) from gv$parameter where name = 'instance_name'
